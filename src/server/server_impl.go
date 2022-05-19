@@ -6,6 +6,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/pprof"
@@ -43,6 +44,10 @@ import (
 )
 
 var tracer = otel.Tracer("ratelimit server")
+
+const (
+	udsAddress = "/shared-socket/.sock"
+)
 
 type serverDebugListener struct {
 	endpoints map[string]string
@@ -171,12 +176,22 @@ func (server *server) Start() {
 }
 
 func (server *server) startGrpc() {
+	cleanup(server.grpcAddress)
+
 	logger.Warnf("Listening for gRPC on '%s'", server.grpcAddress)
-	lis, err := reuseport.Listen("tcp", server.grpcAddress)
+	lis, err := net.Listen("unix", server.grpcAddress)
 	if err != nil {
 		logger.Fatalf("Failed to listen for gRPC: %v", err)
 	}
 	server.grpcServer.Serve(lis)
+}
+
+func cleanup(sockAddr string) {
+	if _, err := os.Stat(sockAddr); err == nil {
+		if err := os.RemoveAll(sockAddr); err != nil {
+			log.Fatal(err)
+		}
+	}
 }
 
 func (server *server) Scope() gostats.Scope {
@@ -214,7 +229,7 @@ func newServer(s settings.Settings, name string, statsManager stats.Manager, loc
 
 	// setup listen addresses
 	ret.httpAddress = net.JoinHostPort(s.Host, strconv.Itoa(s.Port))
-	ret.grpcAddress = net.JoinHostPort(s.GrpcHost, strconv.Itoa(s.GrpcPort))
+	ret.grpcAddress = udsAddress
 	ret.debugAddress = net.JoinHostPort(s.DebugHost, strconv.Itoa(s.DebugPort))
 
 	// setup stats
